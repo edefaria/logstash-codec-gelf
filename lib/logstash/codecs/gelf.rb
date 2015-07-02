@@ -169,7 +169,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     if @ship_timestamp
-      event["timestamp"] = DateTime.parse(event["timestamp"]).to_time.to_f.to_s
+      event["timestamp"] = DateTime.parse(event["timestamp"]).to_time.to_f.to_s if !event["timestamp"].nil?
     end
 
     if @ship_tags
