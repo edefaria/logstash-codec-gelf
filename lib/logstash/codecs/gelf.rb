@@ -173,7 +173,11 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     if @ship_tags
-      event["_tags"] = event["tags"].join(', ') if event["tags"]
+      if event["tags"].is_a?(Array)
+        m["_tags"] = event["tags"].join(', ')
+      else
+        m["_tags"] = event["tags"]
+      end
     end
 
     if @custom_fields
@@ -195,7 +199,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     else
       level = event.sprintf(@level.to_s)
     end
-    event["level"] = (@level_map[level.downcase] || level).to_i
+    event["level"] = (@level_map[level.to_s.downcase] || level).to_i
 
     @on_event.call(event, event.to_json)
   end # def encode
