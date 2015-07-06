@@ -54,7 +54,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   # Ship tags within events. This will cause logstash to ship the tags of an
   # event as the field _tags.
-  config :ship_tags, :validate => :boolean, :default => true
+  config :ship_tags, :validate => :boolean, :default => false
 
   # Ship timestamp to float epoch
   config :ship_timestamp, :validate => :boolean, :default => true
@@ -169,14 +169,21 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     if @ship_timestamp
-      event["timestamp"] = DateTime.parse(event["timestamp"]).to_time.to_f.to_s if !event["timestamp"].nil?
+      if !event["timestamp"].nil?
+        begin
+          dt = DateTime.parse(event["timestamp"]).to_time.to_f.to_s
+        rescue ArgumentError, NoMethodError
+          dt = nil
+        end
+        event["timestamp"] = dt if !dt.nil?
+      end
     end
 
     if @ship_tags
       if event["tags"].is_a?(Array)
-        m["_tags"] = event["tags"].join(', ')
+        event["_tags"] = event["tags"].join(', ')
       else
-        m["_tags"] = event["tags"]
+        event["_tags"] = event["tags"]
       end
     end
 
@@ -193,13 +200,13 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         parsed_value = event.sprintf(value)
         next if value.count('%{') > 0 and parsed_value == value
 
-        level = parsed_value
+        level = parsed_value.to_s
         break
       end
     else
       level = event.sprintf(@level.to_s)
     end
-    event["level"] = (@level_map[level.to_s.downcase] || level).to_i
+    event["level"] = (@level_map[level.downcase] || level).to_i
 
     @on_event.call(event, event.to_json)
   end # def encode
