@@ -169,17 +169,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     if @ship_timestamp
-      if !event['@timestamp'].nil?
-        begin
-          dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f.to_s
-        rescue ArgumentError, NoMethodError
-          dt = nil
-        end
-        event["@timestamp"] = dt if !dt.nil?
-      end
-      if event.timestamp.nil?
-        if !event["timestamp"].nil?
-          event["timestamp"] = m['@timestamp']
+      if event["timestamp"].nil?
+        if !event['@timestamp'].nil?
+          begin
+            dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f.to_s
+          rescue ArgumentError, NoMethodError
+            dt = nil
+          end
+          event["timestamp"] = dt if !dt.nil?
         end
       else
         begin
