@@ -134,7 +134,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       end
     end
 
-    event["full_message"] = event.sprintf(@full_message)
+    event["full_message"] = event.sprintf(@full_message) if event["full_message"].nil? or event["full_message"].empty?
 
     event["host"] = event.sprintf(@sender)
 
