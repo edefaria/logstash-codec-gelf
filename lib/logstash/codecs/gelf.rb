@@ -7,10 +7,11 @@ require "stringio"
 require "date"
 
 # GELF codec. This is useful if you want to use logstash
-# to output events to graylog2 using for example the
-# rabbitmq output.
-#
-# More information at <http://graylog2.org/gelf#specs>
+# to input or output events to graylog2 using for example:
+# - logstash-input-tcp
+# - logstash-output-kafka
+# - logstash-output-tcp
+# More information at gelf spec: <http://graylog2.org/gelf#specs>
 class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   config_name "gelf"
 
