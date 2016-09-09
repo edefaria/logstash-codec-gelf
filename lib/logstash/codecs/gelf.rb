@@ -1,5 +1,6 @@
 require "logstash/codecs/base"
 require "logstash/util/charset"
+require "logstash/util/buftok"
 require "logstash/json"
 require "logstash/namespace"
 require "stringio"
@@ -32,7 +33,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # The following additional severity_labels from logstash's  syslog_pri filter
   # are accepted: "emergency", "alert", "critical",  "warning", "notice", and
   # "informational"
-  config :level, :validate => :array, :default => [ "%{severity}", "INFO" ]
+  config :level, :validate => :array, :default => [ "%{severity}" ]
 
   # The GELF facility. Dynamic values like %{foo} are permitted here; this
   # is useful if you need to use a value from the event as the facility name.
@@ -50,7 +51,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Ship metadata within event object? This will cause logstash to ship
   # any fields in the event (such as those created by grok) in the GELF
   # messages.
-  config :ship_metadata, :validate => :boolean, :default => false
+  config :ship_metadata, :validate => :boolean, :default => true
 
   # Ship tags within events. This will cause logstash to ship the tags of an
   # event as the field _tags.
@@ -68,6 +69,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # e.g. `custom_fields => ['foo_field', 'some_value']
   # sets `_foo_field` = `some_value`
   config :custom_fields, :validate => :hash, :default => {}
+
+  # Change the delimiter that separates events
+  config :delimiter, :validate => :string
 
   # The GELF full message. Dynamic values like %{foo} are permitted here.
   config :full_message, :validate => :string, :default => "%{message}"
@@ -87,6 +91,30 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # For nxlog users, you may to set this to "CP1252".
   config :charset, :validate => ::Encoding.name_list, :default => "UTF-8"
 
+  # Whether or not to remap the GELF message fields to Logstash event fields or
+  # leave them intact.
+  #
+  # Remapping converts the following GELF fields to Logstash equivalents:
+  #
+  # * `full\_message` becomes `event["message"]`.
+  # * if there is no `full\_message`, `short\_message` becomes `event["message"]`.
+  config :remap, :validate => :boolean, :default => true
+
+  # Whether or not to remove the leading `\_` in GELF fields or leave them
+  # in place during decode.
+  #
+  # e.g. `\_foo` becomes `foo`
+  #
+  config :strip_leading_underscore, :validate => :boolean, :default => true
+
+  RECONNECT_BACKOFF_SLEEP = 5
+  TIMESTAMP_GELF_FIELD = "timestamp".freeze
+  SOURCE_HOST_FIELD = "source_host".freeze
+  MESSAGE_FIELD = "message"
+  TAGS_FIELD = "tags"
+  PARSE_FAILURE_TAG = "_jsonparsefailure"
+  PARSE_FAILURE_LOG_MESSAGE = "JSON parse failure. Falling back to plain-text"
+
   public
   def register
     @logger.info("Starting gelf codec...")
@@ -103,26 +131,54 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       "emergency" => 0, "e" => 0,
     }
     # The version of GELF that we conform to
-    @gelf_version = "1.0"
+    @gelf_version = "1.1"
+    if @delimiter
+      case @delimiter
+        when "line"
+          @delimiter = "\n"
+        when "nul", "null"
+         @delimiter = "\x00"
+      end
+      @buffer = FileWatch::BufferedTokenizer.new(@delimiter)
+    end
     @converter = LogStash::Util::Charset.new(@charset)
     @converter.logger = @logger
   end # register
 
   public
-  def decode(data)
-    data = @converter.convert(data)
-    begin
-      yield LogStash::Event.new(LogStash::Json.load(data))
-    rescue LogStash::Json::ParserError => e
-      @logger.info("JSON parse failure. Falling back to plain-text", :error => e, :data => data)
-      yield LogStash::Event.new("message" => data, "tags" => ["_jsonparsefailure"])
+  def decode_gelf(event)
+    @logger.debug(["event",event])
+    unless event.nil?
+      if (gelf_timestamp = event[TIMESTAMP_GELF_FIELD]).is_a?(Numeric)
+        event.timestamp = coerce_timestamp(gelf_timestamp)
+        event.remove(TIMESTAMP_GELF_FIELD)
+      end
+      remap_gelf(event) if @remap
+      strip_leading_underscore(event) if @strip_leading_underscore
+    end
+    event
+  end # decode_gelf
+
+  public
+  def decode(data, &block)
+    @logger.debug(["decode(data)", data])
+    if @delimiter
+      @buffer.extract(data).each do |line|
+        @logger.debug(["decode(line)", line])
+        yield decode_gelf(parse(@converter.convert(line), &block))
+      end
+    else
+      # data received.  Remove trailing \0
+      data[-2] == "\u0000" && data = data[0...-2]
+      data[-1] == "\u0000" && data = data[0...-1]
+      yield decode_gelf(parse(@converter.convert(data), &block))
     end
   end # def decode
 
   public
   def encode(event)
     @logger.debug(["encode(event)", event])
-    event["version"] = @gelf_version;
+    event["version"] = @gelf_version
 
     event["short_message"] = event["message"]
     if event[@short_message]
@@ -144,35 +200,13 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     event["line"] = event.sprintf(@line) if @line
     event["line"] = event["line"].to_i if event["line"].is_a?(String) and event["line"] === /^[\d]+$/
 
-    if @ship_metadata
-      event.to_hash.each do |name, value|
-        next if value == nil
-        next if name == "message"
-
-        # Trim leading '_' in the data
-        name = name[1..-1] if name.start_with?('_')
-        name = "_id" if name == "id"  # "_id" is reserved, so use "__id"
-        if !value.nil? and !@ignore_metadata.include?(name)
-          if value.is_a?(Array)
-            event["_#{name}"] = value.join(', ')
-          elsif value.is_a?(Hash)
-            value.each do |hash_name, hash_value|
-              event["_#{name}_#{hash_name}"] = hash_value
-            end
-          else
-            # Non array values should be presented as-is
-            # https://logstash.jira.com/browse/LOGSTASH-113
-            event["_#{name}"] = value
-          end
-        end
-      end
-    end
+    event = add_leading_underscore(event) if @ship_metadata
 
     if @ship_timestamp
       if event["timestamp"].nil?
         if !event['@timestamp'].nil?
           begin
-            dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f
+            dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f.round(4)
           rescue ArgumentError, NoMethodError
             dt = nil
           end
@@ -180,7 +214,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         end
       else
         begin
-          dt = DateTime.parse(event["timestamp"].to_iso8601).to_time.to_f
+          dt = DateTime.parse(event["timestamp"].to_iso8601).to_time.to_f.round(4)
         rescue ArgumentError, NoMethodError
           dt = nil
         end
@@ -202,21 +236,123 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       end
     end
 
-    # Probe severity array levels
-    level = nil
-    if @level.is_a?(Array)
-      @level.each do |value|
-        parsed_value = event.sprintf(value)
-        next if value.count('%{') > 0 and parsed_value == value
-
-        level = parsed_value.to_s
-        break
+    # Probe levels/severity
+    if !event["level"]
+      if !event["severity"]
+        level = nil
+        if @level.is_a?(Array)
+          @level.each do |value|
+            unless value.nil?
+              parsed_value = event.sprintf(value) if !event["value"].nil?
+              next if value.count('%{') > 0 and parsed_value == value
+              level = parsed_value.to_s
+              break
+            end
+          end
+        else
+          level = event.sprintf(@level.to_s)
+        end
+        event["level"] = (@level_map[level.downcase] || level).to_i unless level.nil? or level.empty?
+      else
+        event["level"] = (@level_map[event["severity"].downcase] || event["severity"]).to_i unless event["severity"].nil? or event["severity"].empty?
       end
-    else
-      level = event.sprintf(@level.to_s)
     end
-    event["level"] = (@level_map[level.downcase] || level).to_i
 
-    @on_event.call(event, event.to_json)
+    if @delimiter
+      @on_event.call(event, "#{event.to_json}#{@delimiter}")
+    else
+     @on_event.call(event, event.to_json)
+    end
   end # def encode
+
+  private
+  # transform a given timestamp value into a proper LogStash::Timestamp, preserving microsecond precision
+  # and work around a JRuby issue with Time.at loosing fractional part with BigDecimal.
+  # @param timestamp [Numeric] a Numeric (integer, float or bigdecimal) timestampo representation
+  # @return [LogStash::Timestamp] the proper LogStash::Timestamp representation
+  def coerce_timestamp(timestamp)
+    # bug in JRuby prevents correcly parsing a BigDecimal fractional part, see https://github.com/elastic/logstash/issues/4565
+    timestamp.is_a?(BigDecimal) ? LogStash::Timestamp.at(timestamp.to_i, timestamp.frac * 1000000) : LogStash::Timestamp.at(timestamp)
+  end # def coerce_timestamp
+
+  def remap_gelf(event)
+    if event["full_message"] && !event["full_message"].empty?
+      event["message"] = event["full_message"].dup
+      event.remove("full_message")
+      if event["short_message"] == event["message"]
+        event.remove("short_message")
+      end
+    elsif event["short_message"]  && !event["short_message"].empty?
+      event["message"] = event["short_message"].dup
+      event.remove("short_message")
+    end
+    if event["version"]
+      event.remove("version")
+    end
+    if event["timestamp"]
+      event.remove("timestamp")
+    end
+  end # def remap_gelf
+
+  def strip_leading_underscore(event)
+     # Map all '_foo' fields to simply 'foo'
+     event.to_hash.keys.each do |key|
+       next unless key[0,1] == "_"
+       event.set(key[1..-1], event.get(key))
+       event.remove(key)
+     end
+  end # def strip_leading_underscores
+
+  def add_leading_underscore(event)
+     event.to_hash.keys.each do |key|
+        name = key
+        value = event[key]
+        next if name == "message"
+
+        # Trim leading '_' in the data
+        name = name[1..-1] if name.start_with?('_')
+        name = "_id" if name == "id"  # "_id" is reserved, so use "__id"
+        if !@ignore_metadata.include?(name)
+          if value.nil?
+            event.set("_#{name}", nil)
+          elsif value.is_a?(Array)
+            event.set("_#{name}", value.join(', '))
+          elsif value.is_a?(Hash)
+            value.each do |hash_name, hash_value|
+              event.set("_#{name}_#{hash_name}", hash_value)
+            end
+          else
+            # Non array values should be presented as-is
+            # https://logstash.jira.com/browse/LOGSTASH-113
+            event.set("_#{name}", value)
+          end
+          event.remove(name)
+        end
+     end
+     @logger.debug(["after (add_leading_underscore)", event])
+     event
+  end # def add_leading_underscore
+
+  # from_json_parse uses the Event#from_json method to deserialize and directly produce events
+  def from_json_parse(json, &block)
+    LogStash::Event.from_json(json).each { |event| event }
+  rescue LogStash::Json::ParserError => e
+    @logger.warn("JSON parse error, original data now in message field", :error => e, :data => json)
+    LogStash::Event.new("message" => json, "tags" => ["_jsonparsefailure"])
+  end # def from_json_parse
+
+  # legacy_parse uses the LogStash::Json class to deserialize json
+  def legacy_parse(json, &block)
+    # ignore empty/blank lines which LogStash::Json#load returns as nil
+    o = LogStash::Json.load(json)
+    LogStash::Event.new(o) if o
+  rescue LogStash::Json::ParserError => e
+    @logger.warn("JSON parse error, original data now in message field", :error => e, :data => json)
+    LogStash::Event.new("message" => json, "tags" => ["_jsonparsefailure"])
+  end # def legacy_parse
+
+  # keep compatibility with all v2.x distributions. only in 2.3 will the Event#from_json method be introduced
+  # and we need to keep compatibility for all v2 releases.
+  alias_method :parse, LogStash::Event.respond_to?(:from_json) ? :from_json_parse : :legacy_parse
+
 end # class LogStash::Codecs::Gelf
