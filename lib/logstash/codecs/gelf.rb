@@ -52,7 +52,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Ship metadata within event object? This will cause logstash to ship
   # any fields in the event (such as those created by grok) in the GELF
   # messages.
-  config :ship_metadata, :validate => :boolean, :default => true
+  config :ship_metadata, :validate => :boolean, :default => false
 
   # Ship tags within events. This will cause logstash to ship the tags of an
   # event as the field _tags.
@@ -63,7 +63,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   # Ignore these fields when ship_metadata is set. Typically this lists the
   # fields used in dynamic values for GELF fields.
-  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "severity", "host", "source_host", "source_path", "short_message" ]
+  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
 
   # The GELF custom field mappings. GELF supports arbitrary attributes as custom
   # fields. This exposes that. Exclude the `_` portion of the field name
@@ -108,6 +108,13 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   #
   config :strip_leading_underscore, :validate => :boolean, :default => true
 
+  # Add the leading `\_` in GELF fields or leave them
+  # in place during encode.
+  #
+  # e.g. `foo` becomes `\_foo`
+  #
+  config :add_leading_underscore, :validate => :boolean, :default => true
+
   RECONNECT_BACKOFF_SLEEP = 5
   TIMESTAMP_GELF_FIELD = "timestamp".freeze
   SOURCE_HOST_FIELD = "source_host".freeze
@@ -134,11 +141,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     # The version of GELF that we conform to
     @gelf_version = "1.1"
     if @delimiter
+      # Fix some control character
       case @delimiter
-        when "line"
+        when "\\n"  # end of line character
           @delimiter = "\n"
-        when "nul", "null"
-         @delimiter = "\x00"
+        when "\\0", "\\x00", "\\u0000"  # nul character
+          @delimiter = "\x00"
+        when "\\t"  # tab character
+          @delimiter = "\t"
       end
       @buffer = FileWatch::BufferedTokenizer.new(@delimiter)
     end
@@ -201,7 +211,17 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     event["line"] = event.sprintf(@line) if @line
     event["line"] = event["line"].to_i if event["line"].is_a?(String) and event["line"] === /^[\d]+$/
 
-    event = add_leading_underscore(event) if @ship_metadata
+    if @ship_tags
+      unless event["tags"].nil?
+        if event["tags"].is_a?(Array)
+          event.set("_tags",event["tags"].join(', '))
+        else
+          event.set("_tags",event["tags"])
+        end
+        event.remove("tags")
+      end
+    end
+    event = add_leading_underscore(event) if @add_leading_underscore
 
     if @ship_timestamp
       if event["timestamp"].nil?
@@ -220,14 +240,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
           dt = nil
         end
         event["timestamp"] = dt if !dt.nil?
-      end
-    end
-
-    if @ship_tags
-      if event["tags"].is_a?(Array)
-        event["_tags"] = event["tags"].join(', ')
-      else
-        event["_tags"] = event["tags"]
       end
     end
 
@@ -299,6 +311,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
      # Map all '_foo' fields to simply 'foo'
      event.to_hash.keys.each do |key|
        next unless key[0,1] == "_"
+       key = "_id" if key == "__id" # "_id" is reserved, so set back to "id"
        event.set(key[1..-1], event.get(key))
        event.remove(key)
      end
@@ -306,29 +319,35 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   def add_leading_underscore(event)
      event.to_hash.keys.each do |key|
-        name = key
-        value = event[key]
-        next if name == "message"
+       name = key
+       value = event[key]
+       next if name == "message"
 
-        # Trim leading '_' in the data
-        name = name[1..-1] if name.start_with?('_')
-        name = "_id" if name == "id"  # "_id" is reserved, so use "__id"
-        if !@ignore_metadata.include?(name)
-          if value.nil?
-            event.set("_#{name}", nil)
-          elsif value.is_a?(Array)
-            event.set("_#{name}", value.join(', '))
-          elsif value.is_a?(Hash)
-            value.each do |hash_name, hash_value|
-              event.set("_#{name}_#{hash_name}", hash_value)
-            end
-          else
-            # Non array values should be presented as-is
-            # https://logstash.jira.com/browse/LOGSTASH-113
-            event.set("_#{name}", value)
-          end
-          event.remove(name)
-        end
+       # Trim leading '_' in the data
+       name = name[1..-1] if name.start_with?('_')
+       name = "_id" if name == "id"  # "_id" is reserved, so use "__id"
+
+       if !@ignore_metadata.include?(name)
+         if @ship_metadata
+           if value.nil?
+             event.set("_#{name}", nil)
+           elsif value.is_a?(Array)
+             event.set("_#{name}", value.join(', '))
+           elsif value.is_a?(Hash)
+             value.each do |hash_name, hash_value|
+                event.set("_#{name}_#{hash_name}", hash_value)
+             end
+           else
+             # Non array values should be presented as-is
+             # https://logstash.jira.com/browse/LOGSTASH-113
+             event.set("_#{name}", value)
+           end
+           event.remove(name)
+         else
+           event.set("_#{name}", value)
+           event.remove(name)
+         end
+       end
      end
      @logger.debug(["after (add_leading_underscore)", event])
      event
