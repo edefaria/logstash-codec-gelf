@@ -227,7 +227,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       if event["timestamp"].nil?
         if !event['@timestamp'].nil?
           begin
-            dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f.round(4)
+            dt = DateTime.parse(event['@timestamp'].to_iso8601).to_time.to_f
           rescue ArgumentError, NoMethodError
             dt = nil
           end
@@ -235,7 +235,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         end
       else
         begin
-          dt = DateTime.parse(event["timestamp"].to_iso8601).to_time.to_f.round(4)
+          dt = DateTime.parse(event["timestamp"].to_iso8601).to_time.to_f
         rescue ArgumentError, NoMethodError
           dt = nil
         end
