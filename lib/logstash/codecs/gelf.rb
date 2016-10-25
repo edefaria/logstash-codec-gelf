@@ -52,7 +52,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Ship metadata within event object? This will cause logstash to ship
   # any fields in the event (such as those created by grok) in the GELF
   # messages.
-  config :ship_metadata, :validate => :boolean, :default => false
+  config :ship_metadata, :validate => :boolean, :default => true
 
   # Ship tags within events. This will cause logstash to ship the tags of an
   # event as the field _tags.
@@ -63,7 +63,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   # Ignore these fields when ship_metadata is set. Typically this lists the
   # fields used in dynamic values for GELF fields.
-  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
+  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
 
   # The GELF custom field mappings. GELF supports arbitrary attributes as custom
   # fields. This exposes that. Exclude the `_` portion of the field name
