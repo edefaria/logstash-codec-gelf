@@ -1,10 +1,77 @@
-# Logstash Plugin
+# Logstash gelf codec Plugin
 
-[![Travis Build Status](https://travis-ci.org/logstash-plugins/logstash-codec-multiline.svg)](https://travis-ci.org/logstash-plugins/logstash-codec-multiline)
+This is a codec plugin for [Logstash](https://github.com/elastic/logstash) to parse gelf messages.
 
-This is a plugin for [Logstash](https://github.com/elastic/logstash).
+It requires Logstash >= 2.4.0.
 
 It is fully free and fully open source. The license is Apache 2.0, meaning you are pretty much free to use it however you want in whatever way.
+
+## Configuration
+
+**custom_fields**: an array for adding custom field mappings.
+e.g.
+```
+custom_fields => ['foo_field', 'some_value']
+```
+```
+custom_fields => ['foo_field', 'some_value', 'second_field', 'second_value']
+```
+
+**delimiter**: Support Gelf TCP frame delimiter (use nul framing with Gelf TCP). No framing is loaded by default (for UDP, kafka, ...).
+Only nul,tab,end of line delimiter is supported currently.
+e.g. nul delimiter:
+```
+delimiter => "\x00"
+```
+e.g. end of line delimiter:
+```
+delimiter => "\n"
+```
+
+Use this codec in any configuration of logstash input or output plugins.
+Here's some examples.
+
+Input TCP:
+```
+input {
+  tcp {
+    codec => gelf { delimiter => "\x00" }
+    port => 12201
+  }
+}
+```
+
+
+Output TCP with TLS:
+```
+output {
+  tcp {
+    host => "localhost"
+    port => 12201
+    codec => gelf {
+      delimiter => "\x00"
+      custom_fields => ['foo_field', 'some_value']
+    }
+    ssl_enable => true
+    ssl_cacert => "/etc/ssl/certs"
+    ssl_cert => "/etc/ssl/private/server.crt"
+    ssl_key => "/etc/ssl/private/server.key"
+    ssl_verify => true
+  }
+}
+```
+
+Output kafka:
+```
+output {
+  kafka {
+    topic_id => "my_topic"
+    codec => gelf { custom_fields => ['foo_field', 'some_value'] }
+    bootstrap_servers => "127.0.0.1:9092"
+    compression_type => "snappy"
+  }
+}
+```
 
 ## Documentation
 
