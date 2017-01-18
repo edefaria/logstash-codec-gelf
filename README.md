@@ -9,6 +9,7 @@ It is fully free and fully open source. The license is Apache 2.0, meaning you a
 ## Configuration
 
 **custom_fields**: an array for adding custom field mappings.
+
 e.g.
 ```
 custom_fields => ['foo_field', 'some_value']
@@ -17,13 +18,16 @@ custom_fields => ['foo_field', 'some_value']
 custom_fields => ['foo_field', 'some_value', 'second_field', 'second_value']
 ```
 
-**delimiter**: Support Gelf TCP frame delimiter (use nul framing with Gelf TCP). No framing is loaded by default (for UDP, kafka, ...).
-Only nul,tab,end of line delimiter is supported currently.
+**delimiter**: Support Gelf TCP frame delimiter (use nul framing with Gelf TCP).
+No framing is loaded by default (for UDP, kafka, ...).
+
+Only nul, tab, newline delimiter is supported currently.
+
 e.g. nul delimiter:
 ```
 delimiter => "\x00"
 ```
-e.g. end of line delimiter:
+e.g. newline delimiter:
 ```
 delimiter => "\n"
 ```
@@ -31,7 +35,7 @@ delimiter => "\n"
 Use this codec in any configuration of logstash input or output plugins.
 Here's some examples.
 
-Input TCP:
+[Logstash Input TCP](https://www.elastic.co/guide/en/logstash/current/plugins-inputs-tcp.html)
 ```
 input {
   tcp {
@@ -42,7 +46,7 @@ input {
 ```
 
 
-Output TCP with TLS:
+[Logstash Output TCP](https://www.elastic.co/guide/en/logstash/current/plugins-outputs-tcp.html) with TLS
 ```
 output {
   tcp {
@@ -61,7 +65,7 @@ output {
 }
 ```
 
-Output kafka:
+[Logstash Output kafka](https://www.elastic.co/guide/en/logstash/current/plugins-outputs-kafka.html)
 ```
 output {
   kafka {
