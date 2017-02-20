@@ -74,9 +74,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Change the delimiter that separates events
   config :delimiter, :validate => :string
 
-  # The GELF full message field name. If the field full_message does not exist
-  # or is empty, the event message is taken from the field of the string."
-  config :full_message, :validate => :string, :default => "message"
+  # The GELF full message field name. If option is true and if the field is not already set,
+  # set the full_message field value at the value of the field "message".
+  config :full_message, :validate => :boolean, :default => false
 
   # The GELF short message field name. If the field does not exist or is empty,
   # the event message is taken instead.
@@ -192,7 +192,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     @logger.debug("encode(event)", event.to_hash)
     event.set("version", @gelf_version)
 
-    event.set("short_message", event.get("message")) if event.get("short_message").nil? or event.get("short_message").empty?
+    event.set("short_message", event.get("message")) if event.get("short_message").nil?
     if event.get(@short_message)
       v = event.get(@short_message)
       short_message = (v.is_a?(Array) && v.length == 1) ? v.first : v
@@ -202,8 +202,8 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       end
     end
 
-    unless event.get(@full_message).nil?
-      event.set("full_message", event.get(@full_message)) if event.get("full_message").nil? or event.get("full_message").empty?
+    if @full_message
+      event.set("full_message", event.get("message")) if event.get("full_message").nil?
     end
 
     event.set("host", event.sprintf(@sender))
