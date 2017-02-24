@@ -255,11 +255,11 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     # Probe levels/severity
     if event.get("level")
       unless (0..7) === event.get("level")
-        event.set("level", (@level_map[event.get("level").downcase] || event.get("level")).to_i) unless event.get("level").nil? or event.get("level").empty?
+        event.set("level", (@level_map[event.get("level").downcase] || event.get("level")).to_i)
         event.set("level", 1) unless (0..7) === event.get("level")
       end
     elsif event.get("severity")
-      event.set("level", (@level_map[event.get("severity").downcase] || event.get("severity")).to_i) unless event.get("severity").nil? or event.get("severity").empty?
+      event.set("level", (@level_map[event.get("severity").downcase] || event.get("severity")).to_i)
       event.set("level", 1) unless (0..7) === event.get("level")
     end
 
