@@ -173,7 +173,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   public
   def decode(data, &block)
-    @logger.debug("decode(data)", data.to_hash)
+    @logger.debug("decode(data)", :event => data)
     if @delimiter
       @buffer.extract(data).each do |line|
         @logger.debug("decode(line)", line)
