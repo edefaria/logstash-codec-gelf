@@ -253,24 +253,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     # Probe levels/severity
-    if !event.get("level")
-      if !event.get("severity")
-        level = nil
-        if @level.is_a?(Array)
-          @level.each do |value|
-            unless value.nil?
-              parsed_value = event.sprintf(value) if !event.get("value").nil?
-              next if value.count('%{') > 0 and parsed_value == value
-              level = parsed_value.to_s
-              break
-            end
-          end
-        else
-          level = event.sprintf(@level.to_s)
-        end
-        event.set("level", (@level_map[level.downcase] || level).to_i) unless level.nil? or level.empty?
-      else
+    if event.get("level")
+      unless (0..7) === event.get("level")
+        event.set("level", (@level_map[event.get("level").downcase] || event.get("level")).to_i) unless event.get("level").nil? or event.get("level").empty?
+      elsif event.get("severity")
         event.set("level", (@level_map[event.get("severity").downcase] || event.get("severity")).to_i) unless event.get("severity").nil? or event.get("severity").empty?
+      end
+      unless (0..7) === event.get("level")
+        event.set("level", 1)
       end
     end
 
