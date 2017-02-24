@@ -173,10 +173,10 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   public
   def decode(data, &block)
-    @logger.debug("decode(data)", :event => data)
+    @logger.debug("decode(data)", :data => data)
     if @delimiter
       @buffer.extract(data).each do |line|
-        @logger.debug("decode(line)", line)
+        @logger.debug("decode(line)", :line => line)
         yield decode_gelf(parse(@converter.convert(line), &block))
       end
     else
@@ -189,7 +189,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   public
   def encode(event)
-    @logger.debug("encode(event)", event.to_hash)
+    @logger.debug("encode(event)", :event => event)
     event.set("version", @gelf_version)
 
     event.set("short_message", event.get("message")) if event.get("short_message").nil?
@@ -352,7 +352,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
          end
        end
      end
-     @logger.debug("after (add_leading_underscore)", event.to_hash)
+     @logger.debug("after (add_leading_underscore)", :event => event)
   end # def add_leading_underscore
 
   # from_json_parse uses the Event#from_json method to deserialize and directly produce events
