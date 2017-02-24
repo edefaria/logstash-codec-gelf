@@ -159,7 +159,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   public
   def decode_gelf(event)
-    @logger.debug("event",event.to_hash)
+    @logger.debug("event", :event => event)
     unless event.nil?
       if (gelf_timestamp = event.get(TIMESTAMP_GELF_FIELD)).is_a?(Numeric)
         event.timestamp = coerce_timestamp(gelf_timestamp)
