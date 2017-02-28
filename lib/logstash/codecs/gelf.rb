@@ -232,17 +232,17 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
           begin
             dt = DateTime.parse(event.get("@timestamp").to_iso8601).to_time.to_f
           rescue ArgumentError, NoMethodError
-            dt = nil
+            dt = DateTime.now.to_time.to_f
           end
-          event.set("timestamp", dt) if !dt.nil?
+          event.set("timestamp", dt)
         end
       else
         begin
           dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
         rescue ArgumentError, NoMethodError
-          dt = nil
+          dt = DateTime.now.to_time.to_f
         end
-        event.set("timestamp", dt) if !dt.nil?
+        event.set("timestamp", dt)
       end
     end
 
