@@ -36,19 +36,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # "informational"
   config :level, :validate => :array, :default => [ "%{severity}" ]
 
-  # The GELF facility. Dynamic values like %{foo} are permitted here; this
-  # is useful if you need to use a value from the event as the facility name.
-  config :facility, :validate => :string, :deprecated => true
-
-  # The GELF line number; this is usually the line number in your program where
-  # the log event originated. Dynamic values like %{foo} are permitted here, but the
-  # value should be a number.
-  config :line, :validate => :string, :deprecated => true
-
-  # The GELF file; this is usually the source code file in your program where
-  # the log event originated. Dynamic values like %{foo} are permitted here.
-  config :file, :validate => :string, :deprecated => true
-
   # Ship metadata within event object? This will cause logstash to ship
   # any fields in the event (such as those created by grok) in the GELF
   # messages.
@@ -208,12 +195,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
     event.set("host", event.sprintf(@sender))
 
-    # deprecated fields
-    event.set("facility", event.sprintf(@facility)) if @facility
-    event.set("file", event.sprintf(@file)) if @file
-    event.set("line", event.sprintf(@line)) if @line
-    event.set("line", event.get("line").to_i) if event.get("line").is_a?(String) and event.get("line") === /^[\d]+$/
-
     if @ship_tags
       unless event.get("tags").nil?
         if event.get("tags").is_a?(Array)
@@ -302,6 +283,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   def strip_leading_underscore(event)
      # Map all '_foo' fields to simply 'foo'
      event.to_hash.keys.each do |key|
+       next unless key.is_a?(String)
        next unless key[0,1] == "_"
        key = "_id" if key == "__id" # "_id" is reserved, so set back to "id"
        event.set(key[1..-1], event.get(key))
@@ -311,6 +293,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   def add_leading_underscore(event)
      event.to_hash.keys.each do |key|
+       next unless key.is_a?(String)
        name = key
        value = event.get(key)
        next if name == "message"
