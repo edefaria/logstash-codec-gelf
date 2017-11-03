@@ -307,15 +307,21 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
            if value.nil?
              event.set("_#{name}", nil)
            elsif value.is_a?(Array)
-             event.set("_#{name}", value.join(', '))
+             event.set("_#{name}", value.join(', ').to_s)
            elsif value.is_a?(Hash)
              value.each do |hash_name, hash_value|
-                event.set("_#{name}_#{hash_name}", hash_value)
+               if hash_value.is_a? Numeric
+                 event.set("_#{name}_#{hash_name}", hash_value)
+               else
+                 event.set("_#{name}_#{hash_name}", hash_value.to_s)
+               end
              end
            else
-             # Non array values should be presented as-is
-             # https://logstash.jira.com/browse/LOGSTASH-113
-             event.set("_#{name}", value)
+             if value.is_a? Numeric
+               event.set("_#{name}", value)
+             else
+               event.set("_#{name}", value.to_s)
+             end
            end
            event.remove(name)
          else
