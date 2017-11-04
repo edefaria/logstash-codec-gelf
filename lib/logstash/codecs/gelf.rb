@@ -69,6 +69,10 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # the event message is taken instead.
   config :short_message, :validate => :string, :default => "short_message"
 
+  # The GELF short message default message, Fix the short_message by this value
+  # when event message does not exist or is empty.
+  config :default_message, :validate => :string, :default => "-"
+
   # The character encoding used in this codec. Examples include "UTF-8" and
   # "CP1252".
   #
@@ -186,7 +190,11 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       short_message = short_message.to_s
       if !short_message.empty?
         event.set("short_message", short_message)
+      else
+        event.set("short_message", @default_message)
       end
+    else
+      event.set("short_message", @default_message)
     end
 
     if @full_message
