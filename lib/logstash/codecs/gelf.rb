@@ -5,6 +5,7 @@ require "logstash/json"
 require "logstash/namespace"
 require "stringio"
 require "date"
+require "time"
 
 # GELF codec. This is useful if you want to use logstash
 # to input or output events to graylog2 using for example:
@@ -227,9 +228,13 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         end
       else
         begin
-          dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
+          dt = Time.at(Float(timestamp)).to_f
         rescue ArgumentError, NoMethodError
-          dt = DateTime.now.to_time.to_f
+          begin
+            dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
+          rescue ArgumentError, NoMethodError
+            dt = DateTime.now.to_time.to_f
+          end
         end
         event.set("timestamp", dt)
       end
