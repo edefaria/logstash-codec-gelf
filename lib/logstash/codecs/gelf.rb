@@ -228,7 +228,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         end
       else
         begin
-          dt = Time.at(Float(timestamp)).to_f
+          dt = Time.at(Float(event.get("timestamp"))).to_f
         rescue ArgumentError, NoMethodError
           begin
             dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
