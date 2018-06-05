@@ -221,7 +221,8 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         if !event.get('@timestamp').nil?
           begin
             dt = DateTime.parse(event.get("@timestamp").to_iso8601).to_time.to_f
-          rescue ArgumentError, NoMethodError
+          rescue StandardError
+            @logger.warn("Cannot convert @timestemp", :timestamp => event.get("@timestamp"))
             dt = DateTime.now.to_time.to_f
           end
           event.set("timestamp", dt)
@@ -229,10 +230,11 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       else
         begin
           dt = Time.at(Float(event.get("timestamp"))).to_f
-        rescue ArgumentError, NoMethodError
+        rescue StandardError
           begin
             dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
-          rescue ArgumentError, NoMethodError
+          rescue StandardError
+            @logger.warn("Cannot convert timestemp", :timestamp => event.get("timestamp"))
             dt = DateTime.now.to_time.to_f
           end
         end
