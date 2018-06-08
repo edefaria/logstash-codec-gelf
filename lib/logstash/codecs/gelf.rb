@@ -184,7 +184,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     @logger.debug("encode(event)", :event => event)
     event.set("version", @gelf_version)
 
-    event.set("short_message", event.get("message")) if event.get("short_message").nil?
+    if event.get("message")
+      event.set("short_message", event.get("message")) if event.get("short_message").nil?
+    end
     if event.get(@short_message)
       v = event.get(@short_message)
       short_message = (v.is_a?(Array) && v.length == 1) ? v.first : v
