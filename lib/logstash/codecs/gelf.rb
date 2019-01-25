@@ -37,9 +37,8 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # "informational"
   config :level, :validate => :array, :default => [ "%{severity}" ]
 
-  # Ship metadata within event object? This will cause logstash to ship
-  # any fields in the event (such as those created by grok) in the GELF
-  # messages.
+  # Deflate the record object, this will cause record to be deflate
+  # or hash in the record to be more compliance to GELF payload.
   config :ship_metadata, :validate => :boolean, :default => true
 
   # Ship tags within events. This will cause logstash to ship the tags of an
@@ -49,9 +48,21 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Ship timestamp to float epoch
   config :ship_timestamp, :validate => :boolean, :default => true
 
-  # Ignore these fields when ship_metadata is set. Typically this lists the
-  # fields used in dynamic values for GELF fields.
-  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
+  # When deflate the record object, add a max number of field on the result.
+  # When field number is reached, this forces to transform the remain field as a string,
+  # set 0 if you want to disable it.
+  config :max_field, :validate => :number, :default => 150
+
+  # Limit string length on record object because Elasticsearch has a limit of 32k,
+  # set 0 if you want to disable it.
+  config :max_length, :validate => :number, :default => 10922
+
+  # Ignore these fields when ship_metadata is set.
+  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "version", "level", "timestamp", "facility", "line", "file" ]
+
+  # Ignore these fields when addi the leading `\_` in GELF fields.
+  # Typically this lists the fields used in dynamic values for GELF fields.
+  config :ignore_leading_underscore, :validate => :array, :default => [ "version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
 
   # The GELF custom field mappings. GELF supports arbitrary attributes as custom
   # fields. This exposes that. Exclude the `_` portion of the field name
@@ -183,6 +194,15 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   def encode(event)
     @logger.debug("encode(event)", :event => event)
     event.set("version", @gelf_version)
+    event.set("host", event.sprintf(@sender))
+
+    if @custom_fields
+      @custom_fields.each do |field_name, field_value|
+        event.set("_#{field_name}", field_value) unless field_name == 'id'
+      end
+    end
+
+    flatten_gelf(event) if @ship_metadata
 
     if event.get("message")
       event.set("short_message", event.get("message")) if event.get("short_message").nil?
@@ -204,7 +224,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       event.set("full_message", event.get("message")) if event.get("full_message").nil?
     end
 
-    event.set("host", event.sprintf(@sender))
+    add_leading_underscore(event) if @add_leading_underscore
 
     if @ship_tags
       unless event.get("tags").nil?
@@ -215,8 +235,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         end
         event.remove("tags")
       end
+    else
+      event.remove("tags")
     end
-    add_leading_underscore(event) if @add_leading_underscore
 
     if @ship_timestamp
       if event.get("timestamp").nil?
@@ -241,12 +262,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
           end
         end
         event.set("timestamp", dt)
-      end
-    end
-
-    if @custom_fields
-      @custom_fields.each do |field_name, field_value|
-        event.set("_#{field_name}", field_value) unless field_name == 'id'
       end
     end
 
@@ -319,42 +334,92 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
        next unless key.is_a?(String)
        name = key
        value = event.get(key)
-       next if name == "message"
-
        # Trim leading '_' in the data
-       name = name[1..-1] if name.start_with?('_')
-       name = "_id" if name == "id"  # "_id" is reserved, so use "__id"
-
-       if !@ignore_metadata.include?(name)
-         if @ship_metadata
-           if value.nil?
-             event.set("_#{name}", nil)
-           elsif value.is_a?(Array)
-             event.set("_#{name}", value.join(', ').to_s)
-           elsif value.is_a?(Hash)
-             value.each do |hash_name, hash_value|
-               if hash_value.is_a? Numeric
-                 event.set("_#{name}_#{hash_name}", hash_value)
-               else
-                 event.set("_#{name}_#{hash_name}", hash_value.to_s)
-               end
-             end
+       if !name.start_with?('_') and !@ignore_leading_underscore.include?(name)
+         name = "_id" if name == "id" # "_id" is reserved, so use "__id"
+         if !@max_length == 0 and value.is_a?(String)
+           if value.length > @max_length
+             event.set("_#{name}", value[0..@max_length].to_s)
+             event.tag("codec_gelf_value_of_#{name}_striped")
            else
-             if value.is_a? Numeric
-               event.set("_#{name}", value)
-             else
-               event.set("_#{name}", value.to_s)
-             end
+             event.set("_#{name}", value)
            end
-           event.remove(name)
          else
            event.set("_#{name}", value)
-           event.remove(name)
+         end
+         event.remove(name)
+       else
+         if !@max_length == 0 and value.is_a?(String)
+           if value.length > @max_length
+             event.set("#{name}", value[0..@max_length].to_s)
+             event.tag("codec_gelf_value_of_#{name}_striped")
+           end
          end
        end
      end
      @logger.debug("after (add_leading_underscore)", :event => event)
   end # def add_leading_underscore
+
+  def flatten_gelf(event,field=0,reached=false)
+    if field == 0
+      top = true
+    else
+      top = false
+    end
+    flatten = false
+    event.to_hash.keys.each do |key|
+      field += 1 if top
+      next unless key.is_a?(String)
+      name = key
+      value = event.get(key)
+      next if !top && value.is_a?(String)
+      if !@ignore_metadata.include?(name)
+        if value.nil?
+          event.set("#{name}", nil)
+        elsif value.is_a?(Hash)
+          if field + value.count < @max_field or @max_field == 0
+            flatten = true
+            value.each do |hash_name, hash_value|
+              field += 1
+              event.set("#{name}_#{hash_name}", hash_value)
+            end
+            unless top
+              event.remove(name)
+              field -= 1
+            end
+          else
+            reached = true
+            event.set("#{name}", value.to_s) unless top
+          end
+          event.set("#{name}", value.to_s) if top
+        elsif value.is_a?(Array)
+          if field + value.count < @max_field or @max_field == 0
+            flatten = true
+            value.to_enum.with_index(1).each do |arr_value, index|
+              field += 1
+              event.set("#{name}_#{index}", arr_value)
+            end
+            unless top
+              event.remove(name)
+              field -= 1
+            end
+          else
+            reached = true
+            event.set("#{name}", value.to_s) unless top
+          end
+          event.set("#{name}", value.to_s) if top
+        else
+          if value.is_a? Numeric
+            event.set("#{name}", value)
+          else
+            event.set("#{name}", value.to_s) rescue nil
+          end
+        end
+      end
+    end
+    flatten_gelf(event,field,reached) if flatten
+    event.tag("codec_gelf_max_field_reached") if reached
+  end # def flatten_gelf
 
   # from_json_parse uses the Event#from_json method to deserialize and directly produce events
   def from_json_parse(json, &block)
