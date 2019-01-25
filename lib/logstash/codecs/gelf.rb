@@ -54,8 +54,8 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   config :max_field, :validate => :number, :default => 150
 
   # Limit string length on record object because Elasticsearch has a limit of 32k,
-  # set 0 if you want to disable it.
-  config :max_length, :validate => :number, :default => 10922
+  # Limit in byte, set 0 if you want to disable it.
+  config :max_length, :validate => :number, :default => 32766
 
   # Ignore these fields when ship_metadata is set.
   config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "version", "level", "timestamp", "facility", "line", "file" ]
@@ -339,7 +339,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
          name = "_id" if name == "id" # "_id" is reserved, so use "__id"
          if !@max_length == 0 and value.is_a?(String)
            if value.length > @max_length
-             event.set("_#{name}", value[0..@max_length].to_s)
+             begin
+               cutstring = (@max_length / (value.bytesize / value.length)).floor
+             rescue
+               cutstring = (@max_length / 4).floor
+             else
+               cutstring = @max_length if cutstring > @max_length
+             end
+             event.set("_#{name}", value[0..cutstring].to_s)
              event.tag("codec_gelf_value_of_#{name}_striped")
            else
              event.set("_#{name}", value)
@@ -351,7 +358,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
        else
          if !@max_length == 0 and value.is_a?(String)
            if value.length > @max_length
-             event.set("#{name}", value[0..@max_length].to_s)
+             begin
+               cutstring = (@max_length / (value.bytesize / value.length)).floor
+             rescue
+               cutstring = (@max_length / 4).floor
+             else
+               cutstring = @max_length if cutstring > @max_length
+             end
+             event.set("_#{name}", value[0..cutstring].to_s)
              event.tag("codec_gelf_value_of_#{name}_striped")
            end
          end
