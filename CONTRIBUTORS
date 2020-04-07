@@ -2,13 +2,29 @@ The following is a list of people who have contributed ideas, code, bug
 reports, or in general have helped logstash along its way.
 
 Contributors:
+* Bernd Ahlers (bernd)
+* Chris McCoy (lofidellity)
 * Colin Surprenant (colinsurprenant)
-* Jordan Sissel (jordansissel)
+* Edward De Faria (edefaria)
+* Greg Mefford (GregMefford)
+* goblin
+* Guy Boertje (guyboertje)
+* James Turnbull (jamtur01)
+* Jan Seidl (jseidl)
+* JeremyEinfeld
 * João Duarte (jsvd)
+* joe miller (joemiller)
+* John E. Vincent (lusis)
+* Jordan Sissel (jordansissel)
 * Kurt Hurtado (kurtado)
 * Nick Ethier (nickethier)
+* Pete Fritchman (fetep)
 * Pier-Hugues Pellerin (ph)
+* Ralph Meijer (ralphm)
 * Richard Pijnenburg (electrical)
+* runningman84
+* Sébastien Masset (smasset)
+* Suyog Rao (suyograo)
 * Tal Levy (talevy)
 
 Note: If you've sent us patches, bug reports, or otherwise contributed to

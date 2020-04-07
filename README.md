@@ -4,6 +4,15 @@ This is a codec plugin for [Logstash](https://github.com/elastic/logstash) to pa
 
 It requires Logstash >= 2.4.0.
 
+Tested on Logstash 5.6 to 7.x on:
+* logstash-input-tcp
+* logstash-input-kafka
+* logstash-output-kafka
+* logstash-output-tcp
+
+This plugin is develop for gelf usage on logstash environment for [OVH Logs Data Platform](https://docs.ovh.com/fr/logs-data-platform/).
+A lot of check is made in this plugin for generating [gelf protocol](https://docs.graylog.org/en/latest/pages/gelf.html) and to be used on multi user oriented environment.
+
 It is fully free and fully open source. The license is Apache 2.0, meaning you are pretty much free to use it however you want in whatever way.
 
 ## Configuration
@@ -23,7 +32,7 @@ No framing is loaded by default (for UDP, kafka, ...).
 
 Only nul, tab, newline delimiter is supported currently.
 
-e.g. nul delimiter:
+e.g. nul delimiter (for TCP):
 ```
 delimiter => "\x00"
 ```
@@ -45,6 +54,19 @@ input {
 }
 ```
 
+[Logstash Input Kafka](https://www.elastic.co/guide/en/logstash/current/plugins-inputs-kafka.html)
+```
+input {
+  kafka {
+    topic_id => "my_topic"
+    group_id => "logstash-test"
+    codec => gelf {
+      filter_fields => ['foo_field','some_value']
+    }
+    bootstrap_servers => "127.0.0.1:9092"
+    auto_offset_reset => "latest"
+}
+```
 
 [Logstash Output TCP](https://www.elastic.co/guide/en/logstash/current/plugins-outputs-tcp.html) with TLS
 ```
@@ -57,10 +79,6 @@ output {
       custom_fields => ['foo_field', 'some_value']
     }
     ssl_enable => true
-    ssl_cacert => "/etc/ssl/certs"
-    ssl_cert => "/etc/ssl/private/server.crt"
-    ssl_key => "/etc/ssl/private/server.key"
-    ssl_verify => true
   }
 }
 ```

@@ -3,20 +3,22 @@ require "logstash/util/charset"
 require "logstash/util/buftok"
 require "logstash/json"
 require "logstash/namespace"
-require "stringio"
 require "date"
 require "time"
+
+module Boolean; end
+class TrueClass; include Boolean; end
+class FalseClass; include Boolean; end
 
 # GELF codec. This is useful if you want to use logstash
 # to input or output events to graylog2 using for example:
 # - logstash-input-tcp
+# - logstash-input-kafka
 # - logstash-output-kafka
 # - logstash-output-tcp
 # More information at gelf spec: <http://graylog2.org/gelf#specs>
 class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   config_name "gelf"
-
-  milestone 1
 
   # Allow overriding of the gelf 'sender' field. This is useful if you
   # want to use something other than the event's source host as the
@@ -45,7 +47,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # event as the field _tags.
   config :ship_tags, :validate => :boolean, :default => true
 
-  # Ship timestamp to float epoch
+  # Ship timestamp to float epoch.
   config :ship_timestamp, :validate => :boolean, :default => true
 
   # When deflate the record object, add a max number of field on the result.
@@ -53,24 +55,49 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # set 0 if you want to disable it.
   config :max_field, :validate => :number, :default => 150
 
+  # Limit character lenght on record field because Elasticsearch has a limit of 255 characters,
+  # Limit in character, set 0 if you want to disable it.
+  config :max_field_length, :validate => :number, :default => 255
+
   # Limit string length on record object because Elasticsearch has a limit of 32k,
   # Limit in byte, set 0 if you want to disable it.
-  config :max_length, :validate => :number, :default => 32766
+  config :max_value_size, :validate => :number, :default => 32766
+
+  # Limit in size the deflate expansion,
+  # Limit in byte, set 0 if you want to disable it.
+  config :max_metadata_size, :validate => :number, :default => 1015810
+
+  # Keep top Array/Hash value when flatten.
+  config :keep_top, :validate => :boolean, :default => false
+
+  # Active ovh ldp convention based on ruby type variable.
+  config :ovh_ldp, :validate => :boolean, :default => false
+
+  # List ldp convention to exclude when ovh_ldp is set.
+  config :ovh_ldp_convention, :validate => :array, :default => [ "_num", "_double", "_float", "_int", "_long", "_date", "_bool", "_ip", "_geolocation" ]
+
+  # Ignore these fields when ovh_ldp is set.
+  config :ignore_ovh_ldp, :validate => :array, :default => [ "host", "short_message", "full_message" ]
 
   # Ignore these fields when ship_metadata is set.
-  config :ignore_metadata, :validate => :array, :default => [ "@timestamp", "@version", "version", "level", "timestamp", "facility", "line", "file" ]
+  config :ignore_metadata, :validate => :array, :default => [ "tags", "version", "level", "timestamp", "facility", "line", "file" ]
 
   # Ignore these fields when addi the leading `\_` in GELF fields.
   # Typically this lists the fields used in dynamic values for GELF fields.
-  config :ignore_leading_underscore, :validate => :array, :default => [ "version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file" ]
+  config :ignore_leading_underscore, :validate => :array, :default => [ "version", "level", "host", "timestamp", "short_message", "full_message", "facility", "line", "file", "tags" ]
 
-  # The GELF custom field mappings. GELF supports arbitrary attributes as custom
+  # The GELF custom field mappings. GELF supports attributes as custom
   # fields. This exposes that. Exclude the `_` portion of the field name
   # e.g. `custom_fields => ['foo_field', 'some_value']
   # sets `_foo_field` = `some_value`
   config :custom_fields, :validate => :hash, :default => {}
 
-  # Change the delimiter that separates events
+  # On decoding event, Filter only bu the field name_list
+  #  e.g. `filter_fields => ['foo_field', 'some_value']
+  # if multiple field is passed AND operator is apply.
+  config :filter_fields, :validate => :hash, :default => {}
+
+  # Change the delimiter that separates events.
   config :delimiter, :validate => :string
 
   # The GELF full message field name. If option is true and if the field is not already set,
@@ -119,17 +146,18 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   #
   config :add_leading_underscore, :validate => :boolean, :default => true
 
-  RECONNECT_BACKOFF_SLEEP = 5
+  config :elasticsearch_integrity, :validate => :boolean, :default => true
+
   TIMESTAMP_GELF_FIELD = "timestamp".freeze
   SOURCE_HOST_FIELD = "source_host".freeze
-  MESSAGE_FIELD = "message"
-  TAGS_FIELD = "tags"
-  PARSE_FAILURE_TAG = "_jsonparsefailure"
+  TRUE_REGEX = (/^(true|1)$/i).freeze
+  FALSE_REGEX = (/^(false|0)$/i).freeze
   PARSE_FAILURE_LOG_MESSAGE = "JSON parse failure. Falling back to plain-text"
 
   public
+
   def register
-    @logger.info("Starting gelf codec...")
+    logger.debug("Starting gelf codec...")
     # these are syslog words and abbreviations mapped to RFC 5424 integers
     # and logstash's syslog_pri filter
     @level_map = {
@@ -157,139 +185,165 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       @buffer = FileWatch::BufferedTokenizer.new(@delimiter)
     end
     @converter = LogStash::Util::Charset.new(@charset)
-    @converter.logger = @logger
   end # register
 
-  public
-  def decode_gelf(event)
-    @logger.debug("event", :event => event)
-    unless event.nil?
-      if (gelf_timestamp = event.get(TIMESTAMP_GELF_FIELD)).is_a?(Numeric)
-        event.timestamp = coerce_timestamp(gelf_timestamp)
-        event.remove(TIMESTAMP_GELF_FIELD)
-      end
-      remap_gelf(event) if @remap
-      strip_leading_underscore(event) if @strip_leading_underscore
-    end
-    event
-  end # decode_gelf
-
-  public
   def decode(data, &block)
-    @logger.debug("decode(data)", :data => data)
+    logger.debug("decode(data)", :data => data)
     if @delimiter
       @buffer.extract(data).each do |line|
-        @logger.debug("decode(line)", :line => line)
-        yield decode_gelf(parse(@converter.convert(line), &block))
+        logger.debug("decode(line)", :line => line)
+        parse(@converter.convert(line), &block)
       end
     else
-      # data received.  Remove trailing \0
-      data[-2] == "\u0000" && data = data[0...-2]
-      data[-1] == "\u0000" && data = data[0...-1]
-      yield decode_gelf(parse(@converter.convert(data), &block))
+      parse(@converter.convert(data), &block)
     end
   end # def decode
 
-  public
   def encode(event)
-    @logger.debug("encode(event)", :event => event)
-    event.set("version", @gelf_version)
-    event.set("host", event.sprintf(@sender))
+    logger.debug("encode(event)", :event => event)
+    data = event.clone
+    gelf_encode(data)
+    logger.debug("encode(data)", :data => data)
+    if @delimiter
+      @on_event.call(event, "#{data.to_json}#{@delimiter}")
+    else
+     @on_event.call(event, data.to_json)
+    end
+  end # def encode
 
+  def flush(&block)
+    remainder = @buffer.flush
+    if !remainder.empty?
+      parse(@converter.convert(remainder), &block)
+    end
+  end # def flush
+
+  def gelf_encode(data)
+    data.set("version", @gelf_version)
+    data.set("host", data.sprintf(@sender))
     if @custom_fields
       @custom_fields.each do |field_name, field_value|
-        event.set("_#{field_name}", field_value) unless field_name == 'id'
+        data.set("_#{field_name}", field_value) unless field_name == 'id'
       end
     end
 
-    flatten_gelf(event) if @ship_metadata
-
-    if event.get("message")
-      event.set("short_message", event.get("message")) if event.get("short_message").nil?
+    if data.get("message")
+      if data.get("short_message").nil?
+        data.set("short_message", data.get("message"))
+        data.remove("message")
+      end
     end
-    if event.get(@short_message)
-      v = event.get(@short_message)
+    if @full_message
+      if data.get("full_message").nil?
+        data.set("full_message", data.get("short_message").to_s) unless data.get("short_message").empty?
+      end
+    end
+    if data.get("short_message")
+      v = data.get("short_message")
       short_message = (v.is_a?(Array) && v.length == 1) ? v.first : v
       short_message = short_message.to_s
-      if !short_message.empty?
-        event.set("short_message", short_message)
+      unless short_message.empty?
+        data.set("short_message", short_message)
       else
-        event.set("short_message", @default_message)
+        data.set("short_message", @default_message)
       end
     else
-      event.set("short_message", @default_message)
+      data.set("short_message", @default_message)
     end
 
-    if @full_message
-      event.set("full_message", event.get("message")) if event.get("full_message").nil?
+    if @elasticsearch_integrity
+      elasticsearch_integrity(data,flatten_gelf(data))
+    else
+      flatten_gelf(data)
     end
-
-    add_leading_underscore(event) if @add_leading_underscore
 
     if @ship_tags
-      unless event.get("tags").nil?
-        if event.get("tags").is_a?(Array)
-          event.set("_tags", event.get("tags").join(', '))
-        else
-          event.set("_tags", event.get("tags"))
+      if data.get("tags")
+        tags =  data.get("tags")
+        unless tags.nil?
+          if tags.is_a?(Array)
+            if tags.size > 1
+              data.set("_tags", tags.join(', '))
+            else
+              data.set("_tags", tags.first.to_s)
+            end
+          elsif tags.is_a?(String)
+            data.set("_tags", tags)
+          else
+            data.set("_tags", tags.to_s) rescue nil
+          end
+          data.remove("tags")
         end
-        event.remove("tags")
       end
     else
-      event.remove("tags")
+      data.remove("tags")
     end
 
+    # Get/Check timestamp valididy
     if @ship_timestamp
-      if event.get("timestamp").nil?
-        if !event.get('@timestamp').nil?
-          begin
-            dt = DateTime.parse(event.get("@timestamp").to_iso8601).to_time.to_f
-          rescue StandardError
-            @logger.debug("Cannot convert @timestamp", :timestamp => event.get("@timestamp"))
-            dt = DateTime.now.to_time.to_f
+      unless data.get("timestamp")
+        if data.get("_@timestamp")
+          if data.get("_@timestamp").nil?
+            data.set("timestamp", DateTime.now.to_time.to_f)
+          else
+            begin
+              dt = DateTime.parse(data.get("_@timestamp").to_iso8601).to_time.to_f
+            rescue StandardError
+              begin
+                dt = DateTime.parse(data.get("_@timestamp")).to_time.to_f
+              rescue StandardError
+                logger.debug("Cannot convert @timestamp", :timestamp => data.get("_@timestamp"))
+                dt = DateTime.now.to_time.to_f
+              end
+            end
+            data.set("timestamp", dt)
           end
-          event.set("timestamp", dt)
+        else
+          data.set("timestamp", DateTime.now.to_time.to_f)
         end
       else
-        begin
-          dt = Time.at(Float(event.get("timestamp"))).to_f
-        rescue StandardError
+        if data.get("timestamp").nil?
+          data.set("timestamp", DateTime.now.to_time.to_f)
+        else
           begin
-            dt = DateTime.parse(event.get("timestamp").to_iso8601).to_time.to_f
+            dt = Time.at(Float(data.get("timestamp"))).to_f
           rescue StandardError
-            @logger.debug("Cannot convert timestamp", :timestamp => event.get("timestamp"))
-            dt = DateTime.now.to_time.to_f
+            begin
+              dt = DateTime.parse(data.get("timestamp").to_iso8601).to_time.to_f
+            rescue StandardError
+              begin
+                dt = DateTime.parse(data.get("timestamp")).to_time.to_f
+              rescue StandardError
+                logger.debug("Cannot convert timestamp", :timestamp => data.get("timestamp"))
+                dt = DateTime.now.to_time.to_f
+              end
+            end
+          data.set("timestamp", dt)
           end
         end
-        event.set("timestamp", dt)
       end
     end
 
     # Probe levels/severity
-    if event.get("level")
-      unless (0..7) === event.get("level")
+    if data.get("level")
+      unless (0..7) === data.get("level")
         begin
-          event.set("level", (@level_map[event.get("level").to_s.downcase] || event.get("level")).to_i)
+          data.set("level", (@level_map[data.get("level").to_s.downcase] || data.get("level")).to_i)
         rescue StandardError
-          event.set("level", 1)
+          data.set("level", 1)
         end
       end
-    elsif event.get("severity")
+    elsif data.get("severity")
       begin
-        event.set("level", (@level_map[event.get("severity").to_s.downcase] || event.get("severity")).to_i)
+        data.set("level", (@level_map[data.get("severity").to_s.downcase] || data.get("severity")).to_i)
       rescue StandardError
-        event.set("level", 1)
+        data.set("level", 1)
       end
     end
-
-    if @delimiter
-      @on_event.call(event, "#{event.to_json}#{@delimiter}")
-    else
-     @on_event.call(event, event.to_json)
-    end
-  end # def encode
+  end # def gelf_encode
 
   private
+
   # transform a given timestamp value into a proper LogStash::Timestamp, preserving microsecond precision
   # and work around a JRuby issue with Time.at loosing fractional part with BigDecimal.
   # @param timestamp [Numeric] a Numeric (integer, float or bigdecimal) timestampo representation
@@ -298,6 +352,35 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     # bug in JRuby prevents correcly parsing a BigDecimal fractional part, see https://github.com/elastic/logstash/issues/4565
     timestamp.is_a?(BigDecimal) ? LogStash::Timestamp.at(timestamp.to_i, timestamp.frac * 1000000) : LogStash::Timestamp.at(timestamp)
   end # def coerce_timestamp
+
+  def decode_gelf(event, &block)
+    logger.debug("event", :event => event)
+    #event = from_json_parse(event)
+    return if event.nil?
+    if @filter_fields
+      filtered = false
+      @filter_fields.each do |field_name, field_value|
+        value = event.get(field_name)
+        if field_value.empty?
+          filtered = true if value.nil?
+        else
+          unless value.nil?
+            filtered = true if value != field_value
+          else
+            filtered = true
+          end
+        end
+      end
+      return if filtered == true
+    end
+    if (gelf_timestamp = event.get(TIMESTAMP_GELF_FIELD)).is_a?(Numeric)
+      event.timestamp = coerce_timestamp(gelf_timestamp)
+      event.remove(TIMESTAMP_GELF_FIELD)
+    end
+    remap_gelf(event) if @remap
+    strip_leading_underscore(event) if @strip_leading_underscore
+    yield event
+  end # decode_gelf
 
   def remap_gelf(event)
     if event.get("full_message") && !event.get("full_message").empty?
@@ -313,9 +396,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     if event.get("version")
       event.remove("version")
     end
-    if event.get("timestamp")
-      event.remove("timestamp")
-    end
   end # def remap_gelf
 
   def strip_leading_underscore(event)
@@ -324,133 +404,349 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
        next unless key.is_a?(String)
        next unless key[0,1] == "_"
        key = "_id" if key == "__id" # "_id" is reserved, so set back to "id"
-       event.set(key[1..-1], event.get(key))
+       if @ovh_ldp
+         event.set(key[1..-1], convert_type_ldp(key,event.get(key)))
+       else
+         event.set(key[1..-1], event.get(key))
+       end
        event.remove(key)
      end
   end # def strip_leading_underscores
 
-  def add_leading_underscore(event)
-     event.to_hash.keys.each do |key|
-       next unless key.is_a?(String)
-       name = key
-       value = event.get(key)
-       # Trim leading '_' in the data
-       if !name.start_with?('_') and !@ignore_leading_underscore.include?(name)
-         name = "_id" if name == "id" # "_id" is reserved, so use "__id"
-         if !@max_length == 0 and value.is_a?(String)
-           if value.length > @max_length
-             begin
-               cutstring = (@max_length / (value.bytesize / value.length)).floor
-             rescue
-               cutstring = (@max_length / 4).floor
-             else
-               cutstring = @max_length if cutstring > @max_length
-             end
-             event.set("_#{name}", value[0..cutstring].to_s)
-             event.tag("codec_gelf_value_of_#{name}_striped")
-           else
-             event.set("_#{name}", value)
-           end
-         else
-           event.set("_#{name}", value)
+  def truncate_string_length(value)
+    default_length = (@max_value_size / 4).floor
+    begin
+      truncate_length = (@max_value_size / (value.bytesize / value.length)).floor - 1
+    rescue
+      truncate_length = default_length - 1
+    else
+      if truncate_length >= @max_value_size
+        truncate_length = @max_value_size - 1
+      elsif truncate_length < default_length
+        truncate_length = default_length - 1
+      end
+    end
+    return truncate_length
+  end # def truncate_string_length
+
+  def elasticsearch_integrity(data, record)
+     logger.debug("begin (elasticsearch_integrity)", :record => record)
+     record.keys.each do |key|
+       if !@max_field_length == 0 and key.length > @max_field_length
+         unless data.get(key).nil?
+           value = data.get(key)
+           data.remove(key)
+           key = key[0..@max_field_length-1]
+           data.set(key, value)
+           data.tag("codec_gelf_striped_field_#{key}")
          end
-         event.remove(name)
-       else
-         if !@max_length == 0 and value.is_a?(String)
-           if value.length > @max_length
-             begin
-               cutstring = (@max_length / (value.bytesize / value.length)).floor
-             rescue
-               cutstring = (@max_length / 4).floor
-             else
-               cutstring = @max_length if cutstring > @max_length
-             end
-             event.set("_#{name}", value[0..cutstring].to_s)
-             event.tag("codec_gelf_value_of_#{name}_striped")
+       end
+       if !@max_value_size == 0
+         unless record.key?(key)
+           record[key] = get_size(data.get(key))
+         end
+         if record[key] >= @max_value_size
+           unless data.get(key).nil?
+             cutstring = truncate_string_length(data.get(key))
+             data.set(key, data.get(key).to_s[0..cutstring])
+             data.tag("codec_gelf_value_of_#{key}_striped")
            end
          end
        end
      end
-     @logger.debug("after (add_leading_underscore)", :event => event)
+     logger.debug("after (elasticsearch_integrity)", :data => data)
+  end # def elasticsearch_integrity
+
+  def convert_type_ldp(field, value)
+    if field.end_with? *@ovh_ldp_convention
+      case field.split("_").last
+        when "int", "long"
+          value.to_i rescue value
+        when "num", "double", "float"
+          value.to_f rescue value
+        when "bool"
+          if value.to_s =~ TRUE_REGEX
+            true
+          elsif value.to_s.empty? || value.to_s =~ FALSE_REGEX
+            false
+          else
+            value
+          end
+        when "date"
+          LogStash::Timestamp.parse_iso8601(value) rescue value
+        else
+          value
+      end
+    else
+      value
+    end
+  end # def convert_type_ldp
+
+  def rewrite_ldp(data, type, name, field, value)
+    unless name.end_with? *@ovh_ldp_convention
+      field="#{field}_#{type}"
+      if data.get(field).nil?
+        data.set(field, value)
+        data.remove(name)
+        return field
+      end
+    end
+    return name
+  end # def rewrite_ldp
+
+  def check_leading_underscore(data,name,field)
+    if name != field
+      data.remove(name)
+    end
+  end # def check_leading_underscore
+
+  def is_t(value)
+    begin
+      if value[10] == "T"
+        return true
+      end
+    rescue
+      return false
+    end
+  end # def is_t
+
+  def add_leading_underscore(field)
+    if @add_leading_underscore
+      if !field.start_with?('_') and !@ignore_leading_underscore.include?(field)
+        field = "_id" if field == "id" # "_id" is reserved, so use "__id"
+        return "_#{field}"
+      else
+        return field
+      end
+      return field
+    end
   end # def add_leading_underscore
 
-  def flatten_gelf(event,field=0,reached=false)
-    if field == 0
+  def get_size(value)
+    unless @max_metadata_size == 0
+      value_size = value.to_s.bytesize
+      unless @max_value_size == 0
+        if value_size > @max_value_size
+          return @max_value_size
+        else
+          return value_size
+        end
+      else
+        return value_size
+      end
+    end
+    return 0
+  end # def get_size
+
+  def flatten_gelf(data,fields=0,size=0,reached=false,limit=false,looped=0,record={})
+    if fields == 0
       top = true
     else
       top = false
     end
     flatten = false
-    event.to_hash.keys.each do |key|
-      field += 1 if top
-      next unless key.is_a?(String)
+    data.to_hash.keys.each do |key|
+      next if record[key]
       name = key
-      value = event.get(key)
-      next if !top && value.is_a?(String)
+      if top
+        field = add_leading_underscore(key)
+      else
+        field = key
+      end
+      value = data.get(key)
+      value_size = get_size(value)
+      if top
+        next if field == "tags"
+        if !name.is_a?(String)
+          name = name.to_s rescue next
+          data.remove(key)
+          data.set(field, value)
+          check_leading_underscore(data,name,field)
+        end
+        fields += 1
+        size += value_size
+      end
+      if !top && (value.is_a?(String) and !is_t(value))
+        record[field] = value_size
+        next
+      end
       if !@ignore_metadata.include?(name)
         if value.nil?
-          event.set("#{name}", nil)
+          data.set(field, nil)
+          check_leading_underscore(data,name,field) if top
+          record[field] = value_size
         elsif value.is_a?(Hash)
-          if field + value.count < @max_field or @max_field == 0
+          if fields + value.count <= @max_field or @max_field == 0
             flatten = true
+            remove = true
             value.each do |hash_name, hash_value|
-              field += 1
-              event.set("#{name}_#{hash_name}", hash_value)
+              if data.get("#{field}_#{hash_name}").nil? and ("#{field}_#{hash_name}".length <= @max_field_length || @max_field_length == 0) and (size + get_size(hash_value) <= @max_metadata_size || @max_metadata_size == 0)
+                fields += 1
+                size += get_size(hash_value)
+                data.set("#{field}_#{hash_name}", hash_value)
+              else
+                limit = true
+                remove = false
+              end
             end
-            unless top
-              event.remove(name)
-              field -= 1
+            if !top and remove
+              data.remove(name)
+              fields -= 1
+              size -= value_size
+            elsif !remove or top
+              data.set(field, value.to_s)
+              check_leading_underscore(data,name,field) if top
+              record[field] = value_size
             end
           else
             reached = true
-            event.set("#{name}", value.to_s) unless top
+            remove = false
+            unless top
+              data.set(field, value.to_s)
+              record[field] = value_size
+            end
           end
-          event.set("#{name}", value.to_s) if top
+          if top
+            if !@keep_top and remove and ![@ignore_ovh_ldp].include?(name)
+              data.remove(field)
+              check_leading_underscore(data,name,field)
+              fields -= 1
+              size -= value_size
+            else
+              data.set(field, value.to_s)
+              check_leading_underscore(data,name,field)
+              record[field] = value_size
+            end
+          end
         elsif value.is_a?(Array)
-          if field + value.count < @max_field or @max_field == 0
+          if fields + value.count <= @max_field or @max_field == 0
             flatten = true
-            value.to_enum.with_index(1).each do |arr_value, index|
-              field += 1
-              event.set("#{name}_#{index}", arr_value)
+            remove = true
+            index = 1
+            value.each do |arr_value|
+              if data.get("#{field}_#{index}").nil? and ("#{field}_#{index}".length <= @max_field_length || @max_field_length == 0) and (size + get_size(arr_value) <= @max_metadata_size || @max_metadata_size == 0)
+                fields += 1
+                size += get_size(arr_value)
+                data.set("#{field}_#{index}", arr_value)
+              else
+                limit = true
+                remove = false
+              end
+              index += 1
             end
-            unless top
-              event.remove(name)
-              field -= 1
+            if !top and remove
+              data.remove(name)
+              fields -= 1
+              size -= value_size
+            elsif !remove or top
+              data.set(field, value.to_s)
+              check_leading_underscore(data,name,field) if top
+              record[field] = value_size
             end
           else
             reached = true
-            event.set("#{name}", value.to_s) unless top
+            remove = false
+            unless top
+              data.set(field, value.to_s)
+              record[field] = value_size
+            end
           end
-          event.set("#{name}", value.to_s) if top
+          if top
+            if !@keep_top and remove and ![@ignore_ovh_ldp].include?(name)
+              data.remove(field)
+              check_leading_underscore(data,name,field)
+              fields -= 1
+              size -= value_size
+            else
+              data.set(field, value.to_s)
+              check_leading_underscore(data,name,field)
+              record[field] = value_size
+            end
+          end
         else
+          check_leading_underscore(data,name,field) if top
           if value.is_a? Numeric
-            event.set("#{name}", value)
+            if @ovh_ldp
+              if value.is_a? Float
+                rewrite_field = rewrite_ldp(data,"num",name,field,value)
+              elsif value.is_a? Integer
+                rewrite_field = rewrite_ldp(data,"int",name,field,value)
+              else
+                rewrite_field = rewrite_ldp(data,"num",name,field,value)
+              end
+              record[rewrite_field] = 64
+            else
+              data.set(field, value)
+              record[field] = value_size
+            end
+          elsif value.is_a? Boolean
+            if @ovh_ldp
+              rewrite_field = rewrite_ldp(data,"bool",name,field,value)
+              record[rewrite_field] = 8
+            else
+              data.set(field, value)
+              record[field] = value_size
+            end
           else
-            event.set("#{name}", value.to_s) rescue nil
+            if @ovh_ldp
+              if is_t(value)
+                begin
+                  is_iso = LogStash::Timestamp.parse_iso8601(value)
+                rescue
+                  data.set(field, value.to_s) rescue nil
+                  record[field] = value_size
+                else
+                  rewrite_field = rewrite_ldp(data,"date",name,field,value)
+                  record[rewrite_field] = 64
+                end
+              else
+                data.set(field, value.to_s) rescue nil
+                record[field] = value_size
+              end
+            else
+              data.set(field, value.to_s) rescue nil
+              record[field] = value_size
+            end
           end
         end
+      else
+        record[field] = value_size
       end
     end
-    flatten_gelf(event,field,reached) if flatten
-    event.tag("codec_gelf_max_field_reached") if reached
+    looped  += 1
+    record = flatten_gelf(data,fields,size,reached,limit,looped,record) if flatten and looped < 100
+    if reached
+      logger.info("codec gelf: max field reached")
+      data.tag("codec_gelf_max_field_reached")
+    end
+    if limit
+      logger.info("codec gelf: limited expansion")
+      data.tag("codec_gelf_limited_expansion")
+    end
+    if looped >= 100
+      logger.info("codec gelf: max loop reached")
+      logger.info("max loop record:", :record => record)
+    end
+    return record
   end # def flatten_gelf
 
   # from_json_parse uses the Event#from_json method to deserialize and directly produce events
   def from_json_parse(json, &block)
-    LogStash::Event.from_json(json).each { |event| event }
+    # from_json will always return an array of item.
+    # in the context of gelf, the payload should be an array of 1
+    LogStash::Event.from_json(json).each { |event| decode_gelf(event, &block) }
+    #LogStash::Event.from_json(json).each { |event| event }
   rescue LogStash::Json::ParserError => e
-    @logger.warn("JSON parse error, original data now in message field", :error => e, :data => json)
-    LogStash::Event.new("message" => json, "tags" => ["_jsonparsefailure"])
+    logger.warn(PARSE_FAILURE_LOG_MESSAGE, :error => e, :data => json)
   end # def from_json_parse
 
   # legacy_parse uses the LogStash::Json class to deserialize json
   def legacy_parse(json, &block)
     # ignore empty/blank lines which LogStash::Json#load returns as nil
     o = LogStash::Json.load(json)
-    LogStash::Event.new(o) if o
+    decode_gelf(LogStash::Event.new(o), &block) if o
   rescue LogStash::Json::ParserError => e
-    @logger.warn("JSON parse error, original data now in message field", :error => e, :data => json)
-    LogStash::Event.new("message" => json, "tags" => ["_jsonparsefailure"])
+    logger.warn(PARSE_FAILURE_LOG_MESSAGE, :error => e, :data => json)
   end # def legacy_parse
 
   # keep compatibility with all v2.x distributions. only in 2.3 will the Event#from_json method be introduced

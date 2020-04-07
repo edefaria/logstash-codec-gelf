@@ -1,9 +1,9 @@
 Gem::Specification.new do |s|
 
   s.name            = 'logstash-codec-gelf'
-  s.version         = '0.3.0'
+  s.version         = '0.4.0'
   s.licenses        = ['Apache License (2.0)']
-  s.summary         = "This codec may be used to encode (via outputs) gelf (procotol 1.0) messages"
+  s.summary         = "This codec may be used to encode (via outputs) gelf (procotol 1.1) messages"
   s.description     = "This gem is a logstash plugin required to be installed on top of the Logstash core pipeline using $LS_HOME/bin/logstash-plugin install gemname. This gem is not a stand-alone program"
   s.authors         = ["Elastic"]
   s.email           = 'info@elastic.co'
