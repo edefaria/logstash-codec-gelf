@@ -200,10 +200,10 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   end # def decode
 
   def encode(event)
-    logger.debug("encode(event)", :event => event)
+    logger.debug("encode(event)", :event => event.to_hash)
     data = event.clone
     gelf_encode(data)
-    logger.debug("encode(data)", :data => data)
+    logger.debug("encode(data)", :data => data.to_hash)
     if @delimiter
       @on_event.call(event, "#{data.to_json}#{@delimiter}")
     else
@@ -432,16 +432,19 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   def elasticsearch_integrity(data, record)
      logger.debug("begin (elasticsearch_integrity)", :record => record)
      record.keys.each do |key|
-       if !@max_field_length == 0 and key.length > @max_field_length
-         unless data.get(key).nil?
-           value = data.get(key)
-           data.remove(key)
-           key = key[0..@max_field_length-1]
-           data.set(key, value)
-           data.tag("codec_gelf_striped_field_#{key}")
+       unless @max_field_length == 0
+         if key.length > @max_field_length
+           unless data.get(key).nil?
+             value = data.get(key)
+             data.remove(key)
+             key = key[0..@max_field_length-1]
+             data.set(key, value)
+             data.tag("codec_gelf_stripped_field_#{key}")
+             logger.info("codec gelf: stripped filed #{key}")
+           end
          end
        end
-       if !@max_value_size == 0
+       unless @max_value_size == 0
          unless record.key?(key)
            record[key] = get_size(data.get(key))
          end
@@ -449,12 +452,13 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
            unless data.get(key).nil?
              cutstring = truncate_string_length(data.get(key))
              data.set(key, data.get(key).to_s[0..cutstring])
-             data.tag("codec_gelf_value_of_#{key}_striped")
+             data.tag("codec_gelf_value_of_#{key}_stripped")
+             logger.info("codec gelf: value of #{key} stripped")
            end
          end
        end
      end
-     logger.debug("after (elasticsearch_integrity)", :data => data)
+     logger.debug("after (elasticsearch_integrity)", :data => data.to_hash)
   end # def elasticsearch_integrity
 
   def convert_type_ldp(field, value)
