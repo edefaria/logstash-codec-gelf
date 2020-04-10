@@ -281,47 +281,42 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
     # Get/Check timestamp valididy
     if @ship_timestamp
-      unless data.get("timestamp")
-        if data.get("_@timestamp")
-          if data.get("_@timestamp").nil?
-            data.set("timestamp", DateTime.now.to_time.to_f)
-          else
-            begin
-              dt = DateTime.parse(data.get("_@timestamp").to_iso8601).to_time.to_f
-            rescue StandardError
-              begin
-                dt = DateTime.parse(data.get("_@timestamp")).to_time.to_f
-              rescue StandardError
-                logger.debug("Cannot convert @timestamp", :timestamp => data.get("_@timestamp"))
-                dt = DateTime.now.to_time.to_f
-              end
-            end
-            data.set("timestamp", dt)
-          end
-        else
-          data.set("timestamp", DateTime.now.to_time.to_f)
-        end
-      else
-        if data.get("timestamp").nil?
-          data.set("timestamp", DateTime.now.to_time.to_f)
+      if data.get("timestamp").nil?
+        if data.get("_@timestamp").nil?
+          dt = DateTime.now.to_time.to_f
         else
           begin
-            dt = Time.at(Float(data.get("timestamp"))).to_f
+            dt = DateTime.parse(data.get("_@timestamp").to_iso8601).to_time.to_f
           rescue StandardError
             begin
-              dt = DateTime.parse(data.get("timestamp").to_iso8601).to_time.to_f
+              dt = DateTime.parse(data.get("_@timestamp")).to_time.to_f
             rescue StandardError
-              begin
-                dt = DateTime.parse(data.get("timestamp")).to_time.to_f
-              rescue StandardError
-                logger.debug("Cannot convert timestamp", :timestamp => data.get("timestamp"))
-                dt = DateTime.now.to_time.to_f
-              end
+              logger.debug("Cannot convert @timestamp", :timestamp => data.get("_@timestamp"))
+              dt = DateTime.now.to_time.to_f
             end
-          data.set("timestamp", dt)
+          end
+        end
+      else
+        begin
+          dt = Time.at(Float(data.get("timestamp"))).to_f
+        rescue StandardError
+          begin
+            dt = DateTime.parse(data.get("timestamp").to_iso8601).to_time.to_f
+          rescue StandardError
+            begin
+              dt = DateTime.parse(data.get("timestamp")).to_time.to_f
+            rescue StandardError
+              logger.debug("Cannot convert timestamp", :timestamp => data.get("timestamp"))
+              dt = DateTime.now.to_time.to_f
+            end
           end
         end
       end
+      unless dt.is_a?(Numeric)
+        dt = DateTime.now.to_time.to_f
+      end
+      data.set("timestamp", dt)
+      data.timestamp = coerce_timestamp(dt)
     end
 
     # Probe levels/severity
