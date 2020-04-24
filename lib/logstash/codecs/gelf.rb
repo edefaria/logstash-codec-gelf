@@ -399,7 +399,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
        next unless key.is_a?(String)
        next unless key[0,1] == "_"
        key = "_id" if key == "__id" # "_id" is reserved, so set back to "id"
-       if @ovh_ldp
+       if key == "_@timestamp"
+         event.set(key[1..-1], LogStash::Timestamp.coerce(event.get(key)))
+       elsif @ovh_ldp
          event.set(key[1..-1], convert_type_ldp(key,event.get(key)))
        else
          event.set(key[1..-1], event.get(key))
@@ -472,7 +474,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
             value
           end
         when "date"
-          LogStash::Timestamp.parse_iso8601(value) rescue value
+          LogStash::Timestamp.coerce(value) rescue value
         else
           value
       end
