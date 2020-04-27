@@ -223,7 +223,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     data.set("host", data.sprintf(@sender))
     if @custom_fields
       @custom_fields.each do |field_name, field_value|
-        data.set("_#{field_name}", field_value) unless field_name == 'id'
+        data.set("#{field_name}", field_value) unless field_name == 'id'
       end
     end
 
@@ -349,7 +349,6 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   end # def coerce_timestamp
 
   def decode_gelf(event, &block)
-    logger.debug("event", :event => event)
     #event = from_json_parse(event)
     return if event.nil?
     if @filter_fields
@@ -372,8 +371,12 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       event.timestamp = coerce_timestamp(gelf_timestamp)
       event.remove(TIMESTAMP_GELF_FIELD)
     end
-    remap_gelf(event) if @remap
+    if @remap
+      remap_gelf(event)
+      return if event.get("message").nil?
+    end
     strip_leading_underscore(event) if @strip_leading_underscore
+    logger.debug("decode(event)", :event => event.to_hash)
     yield event
   end # decode_gelf
 
@@ -384,7 +387,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       if event.get("short_message") == event.get("message")
         event.remove("short_message")
       end
-    elsif event.get("short_message")  && !event.get("short_message").empty?
+    elsif event.get("short_message") && !event.get("short_message").empty?
       event.set("message", event.get("short_message").dup)
       event.remove("short_message")
     end
