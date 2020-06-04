@@ -494,6 +494,14 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         data.remove(name)
         return field
       end
+    else
+     if name != field
+        if data.get(field).nil?
+          data.set(field, value)
+          data.remove(name)
+          return field
+        end
+      end
     end
     return name
   end # def rewrite_ldp
