@@ -88,13 +88,23 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
 
   # The GELF custom field mappings. GELF supports attributes as custom
   # fields. This exposes that. Exclude the `_` portion of the field name
-  # e.g. `custom_fields => ['foo_field', 'some_value']
-  # sets `_foo_field` = `some_value`
+  # Example:
+  # `custom_fields` => ['foo_field', 'bar_value']
+  # With multiple field/value:
+  # `custom_fields` => {
+  #   'foo_field' => 'bar_value'
+  #   'some_field' => 'some_value'
+  # }
   config :custom_fields, :validate => :hash, :default => {}
 
-  # On decoding event, Filter only bu the field name_list
-  #  e.g. `filter_fields => ['foo_field', 'some_value']
-  # if multiple field is passed AND operator is apply.
+  # On decoding event, Filter only by the field name_list
+  # Example:
+  # `filter_fields` => {
+  #   'foo_field' => 'bar_value'
+  #   'some_field' => ['value1','value2','value3']
+  # }
+  # if multiple field is passed AND operator is apply on each field
+  # if array in value is passed OR operator is apply on each value
   config :filter_fields, :validate => :hash, :default => {}
 
   # Change the delimiter that separates events.
@@ -353,13 +363,20 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     return if event.nil?
     if @filter_fields
       filtered = false
-      @filter_fields.each do |field_name, field_value|
+      @filter_fields.each do |field_name, field_values|
         value = event.get(field_name)
-        if field_value.empty?
+        if field_values.empty?
           filtered = true if value.nil?
         else
           unless value.nil?
-            filtered = true if value != field_value
+            found = false
+            Array(field_values).each do |field_value|
+              if value == field_value
+                found = true
+                break
+                end
+            end
+            filtered = true if found == false
           else
             filtered = true
           end

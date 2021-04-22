@@ -61,7 +61,10 @@ input {
     topic_id => "my_topic"
     group_id => "logstash-test"
     codec => gelf {
-      filter_fields => ['foo_field','some_value']
+      filter_fields => {
+        'foo_field' => 'bar_value'
+        'some_field' => ['value1','value2','value3']
+      }
     }
     bootstrap_servers => "127.0.0.1:9092"
     auto_offset_reset => "latest"
@@ -76,7 +79,7 @@ output {
     port => 12201
     codec => gelf {
       delimiter => "\x00"
-      custom_fields => ['foo_field', 'some_value']
+      custom_fields => { 'foo_field' => 'some_value }
     }
     ssl_enable => true
   }
