@@ -374,7 +374,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
               if value == field_value
                 found = true
                 break
-                end
+              end
             end
             filtered = true if found == false
           else
