@@ -241,6 +241,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       if data.get("short_message").nil?
         data.set("short_message", data.get("message"))
         data.remove("message")
+      elsif data.get("full_message").nil?
+        data.set("full_message", data.get("message"))
+        data.remove("message")
       end
     end
     if @full_message
