@@ -178,7 +178,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       "error" => 3, "e" => 3,
       "critical" => 2, "c" => 2,
       "alert" => 1, "a" => 1,
-      "emergency" => 0, "e" => 0,
+      "emergency" => 0,
     }
     # The version of GELF that we conform to
     @gelf_version = "1.1"
