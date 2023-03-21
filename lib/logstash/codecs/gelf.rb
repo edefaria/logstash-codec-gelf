@@ -612,6 +612,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
             flatten = true
             remove = true
             value.each do |hash_name, hash_value|
+              hash_name = hash_name.tr('[]','_')
               if data.get("#{field}_#{hash_name}").nil? and ("#{field}_#{hash_name}".length <= @max_field_length || @max_field_length == 0) and (size + get_size(hash_value) <= @max_metadata_size || @max_metadata_size == 0)
                 fields += 1
                 size += get_size(hash_value)
