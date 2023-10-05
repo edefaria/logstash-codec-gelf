@@ -68,7 +68,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   config :max_metadata_size, :validate => :number, :default => 1015810
 
   # Keep top Array/Hash value when flatten.
-  config :keep_top, :validate => :boolean, :default => false
+  config :keep_top, :validate => :boolean, :default => true
 
   # Active ovh ldp convention based on ruby type variable.
   config :ovh_ldp, :validate => :boolean, :default => false
@@ -265,9 +265,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     end
 
     if @elasticsearch_integrity
-      elasticsearch_integrity(data,flatten_gelf(data))
+      elasticsearch_integrity(data,flatten_gelf(data,keep_top))
     else
-      flatten_gelf(data)
+      flatten_gelf(data,keep_top)
     end
 
     if @ship_tags
@@ -515,7 +515,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         return field
       end
     else
-     if name != field
+      if name != field
         if data.get(field).nil?
           data.set(field, value)
           data.remove(name)
@@ -570,7 +570,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
     return 0
   end # def get_size
 
-  def flatten_gelf(data,fields=0,size=0,reached=false,limit=false,looped=0,record={})
+  def flatten_gelf(data,keep_top=true,fields=0,size=0,reached=false,limit=false,looped=0,record={})
     if fields == 0
       top = true
     else
@@ -612,7 +612,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
             flatten = true
             remove = true
             value.each do |hash_name, hash_value|
-              hash_name = hash_name.tr('[]','_')
+              hash_name = hash_name.tr('\[\]','_')
               if data.get("#{field}_#{hash_name}").nil? and ("#{field}_#{hash_name}".length <= @max_field_length || @max_field_length == 0) and (size + get_size(hash_value) <= @max_metadata_size || @max_metadata_size == 0)
                 fields += 1
                 size += get_size(hash_value)
@@ -640,7 +640,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
             end
           end
           if top
-            if !@keep_top and remove and ![@ignore_ovh_ldp].include?(name)
+            if !keep_top and remove and ![@ignore_ovh_ldp].include?(name)
               data.remove(field)
               check_leading_underscore(data,name,field)
               fields -= 1
@@ -685,7 +685,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
             end
           end
           if top
-            if !@keep_top and remove and ![@ignore_ovh_ldp].include?(name)
+            if !keep_top and remove and ![@ignore_ovh_ldp].include?(name)
               data.remove(field)
               check_leading_underscore(data,name,field)
               fields -= 1
@@ -699,7 +699,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
         else
           check_leading_underscore(data,name,field) if top
           if value.is_a? Numeric
-            if @ovh_ldp
+            if ovh_ldp
               if value.is_a? Float
                 rewrite_field = rewrite_ldp(data,"num",name,field,value)
               elsif value.is_a? Integer
@@ -713,7 +713,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
               record[field] = value_size
             end
           elsif value.is_a? Boolean
-            if @ovh_ldp
+            if ovh_ldp
               rewrite_field = rewrite_ldp(data,"bool",name,field,value)
               record[rewrite_field] = 8
             else
@@ -721,7 +721,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
               record[field] = value_size
             end
           else
-            if @ovh_ldp
+            if ovh_ldp
               if is_t(value)
                 begin
                   is_iso = LogStash::Timestamp.parse_iso8601(value)
@@ -747,7 +747,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       end
     end
     looped  += 1
-    record = flatten_gelf(data,fields,size,reached,limit,looped,record) if flatten and looped < 100
+    record = flatten_gelf(data,ovh_ldp,keep_top,fields,size,reached,limit,looped,record) if flatten and looped < 100
     if reached
       logger.info("codec gelf: max field reached")
       data.tag("codec_gelf_max_field_reached")
