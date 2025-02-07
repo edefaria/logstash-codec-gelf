@@ -425,9 +425,9 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
        if key == "_@timestamp"
          event.set(key[1..-1], LogStash::Timestamp.coerce(event.get(key)))
        elsif @ovh_ldp
-         event.set(key[1..-1], convert_type_ldp(key,event.get(key)))
+         event.set(key[1..-1], convert_type_ldp(key,event.get(key))) rescue next
        else
-         event.set(key[1..-1], event.get(key))
+         event.set(key[1..-1], event.get(key)) rescue next
        end
        event.remove(key)
      end
