@@ -50,8 +50,8 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
   # Ship timestamp to float epoch.
   config :ship_timestamp, :validate => :boolean, :default => true
 
-  # When deflate the record object, add a max number of field on the result.
-  # When field number is reached, this forces to transform the remain field as a string,
+  # When deflate the record object, count the number of field on the result.
+  # When total field number is reached, this forces to transform the remain field as a string,
   # set 0 if you want to disable it.
   config :max_field, :validate => :number, :default => 150
 
@@ -585,7 +585,7 @@ class LogStash::Codecs::Gelf < LogStash::Codecs::Base
       else
         field = key
       end
-      value = data.get(key)
+      value = data.get(key) rescue next
       value_size = get_size(value)
       if top
         next if field == "tags"
